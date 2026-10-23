@@ -13,6 +13,11 @@ variable "subscription_id" {
   sensitive = true
 }
 
+variable "vm_size" {
+  type    = string
+  default = "Standard_D2as_v7"
+}
+
 variable "resource_group_name" {
   type    = string
   default = "rg-devsecops-lab"
@@ -37,7 +42,7 @@ source "azure-arm" "windows2022" {
   winrm_timeout  = "15m"
   winrm_username = "packer"
 
-  vm_size = "Standard_D2as_v7"
+  vm_size = var.vm_size
 }
 
 build {
