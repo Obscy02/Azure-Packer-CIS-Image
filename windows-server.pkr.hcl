@@ -24,7 +24,7 @@ source "azure-arm" "windows2022" {
 
   managed_image_resource_group_name = var.resource_group_name
   managed_image_name                = "win2022-cis-gold-v1"
-  location                          = "UK South"
+  location                          = "francecentral"
 
   os_type         = "Windows"
   image_publisher = "MicrosoftWindowsServer"
