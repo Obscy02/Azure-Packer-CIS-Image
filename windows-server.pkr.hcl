@@ -45,7 +45,7 @@ build {
 
   # 1. Run the Enterprise Hardening Script
   provisioner "powershell" {
-    script = "./scripts/Invoke-ServerHardening.ps1"
+    script = "./scripts/CIShardening.ps1"
   }
 
   # 2. Reboot VM so RunAsPPL, Schannel, and feature removals take effect
