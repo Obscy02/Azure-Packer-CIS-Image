@@ -37,7 +37,7 @@ source "azure-arm" "windows2022" {
   winrm_timeout  = "15m"
   winrm_username = "packer"
 
-  vm_size = "Standard_D2s_v5"
+  vm_size = "Standard_B2ms"
 }
 
 build {
