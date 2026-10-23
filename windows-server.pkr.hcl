@@ -15,7 +15,7 @@ variable "subscription_id" {
 
 variable "vm_size" {
   type    = string
-  default = "Standard_D2as_v7"
+  default = "Standard_DS1_v2"
 }
 
 variable "resource_group_name" {
@@ -29,7 +29,7 @@ source "azure-arm" "windows2022" {
 
   managed_image_resource_group_name = var.resource_group_name
   managed_image_name                = "win2022-cis-gold-v1"
-  location                          = "italynorth"
+  location                          = "belgiumcentral"
 
   os_type         = "Windows"
   image_publisher = "MicrosoftWindowsServer"

@@ -8,12 +8,10 @@ on:
       vm_size:
         description: "Build VM size"
         type: choice
-        default: Standard_D2as_v7
+        default: Standard_DS1_v2
         options:
-          - Standard_D2as_v7
-          - Standard_D2ads_v7
-          - Standard_D2als_v7
-          - Standard_D2alds_v7
+          - Standard_DS1_v2
+          - Standard_DS2_v2
 
 permissions:
   id-token: write
@@ -49,5 +47,5 @@ jobs:
       - name: Build Hardened Golden Image
         env:
           PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          PKR_VAR_vm_size: ${{ inputs.vm_size || 'Standard_D2as_v7' }}
+          PKR_VAR_vm_size: ${{ inputs.vm_size || 'Standard_DS1_v2' }}
         run: packer build -color=false windows-server.pkr.hcl
