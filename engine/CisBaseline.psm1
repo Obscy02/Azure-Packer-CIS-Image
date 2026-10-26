@@ -226,8 +226,8 @@ function Test-CisControl {
     }
 }
 
-# Runs the selected controls in catalog order. Returns the number of failures
-# (always 0 in Apply mode, where any error throws instead).
+# Runs the selected controls in catalog order. In Test mode, returns one result per
+# control (Id, Title, Passed, Detail). Apply mode returns nothing; any error throws instead.
 function Invoke-CisBaselineRun {
     param(
         [Parameter(Mandatory=$true)][ValidateSet('Apply', 'Test')][string]$Mode,
@@ -236,12 +236,11 @@ function Invoke-CisBaselineRun {
     )
 
     $Total = $Controls.Count
-    $FailCount = 0
     for ($i = 0; $i -lt $Total; $i++) {
         $Control = $Controls[$i]
         if ($Mode -eq 'Apply') {
             Write-Host "[$($i + 1)/$Total] $($Control.id) $($Control.title)"
-            # Discard any stray output so the function only returns the fail count
+            # Discard any stray output so Apply mode never returns anything
             Invoke-CisControl -Control $Control -Context $Context | Out-Null
         } else {
             $Result = Test-CisControl -Control $Control -Context $Context
@@ -249,12 +248,167 @@ function Invoke-CisBaselineRun {
                 Write-Host "[PASS] $($Control.id) $($Control.title)" -ForegroundColor Green
             } else {
                 Write-Host "[FAIL] $($Control.id) $($Control.title): $($Result.Detail)" -ForegroundColor Red
-                $FailCount++
+            }
+            $Result
+        }
+    }
+}
+
+function Get-CisControlById {
+    param($Catalog)
+    $Lookup = @{}
+    foreach ($Control in $Catalog.controls) { $Lookup[$Control.id] = $Control }
+    $Lookup
+}
+
+# Writes the Test-mode results as JSON evidence, including each control's ATT&CK mappings.
+function Export-CisComplianceReport {
+    param(
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][object[]]$Results,
+        [Parameter(Mandatory=$true)]$Catalog,
+        [Parameter(Mandatory=$true)][string]$Os,
+        [Parameter(Mandatory=$true)][int]$Level,
+        [Parameter(Mandatory=$true)][string]$Path
+    )
+
+    $ById = Get-CisControlById $Catalog
+    $Failed = @($Results | Where-Object { -not $_.Passed }).Count
+    $Report = [ordered]@{
+        catalogVersion = $Catalog.version
+        attackVersion  = $Catalog.attackVersion
+        os             = $Os
+        level          = $Level
+        generatedAt    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        passed         = $Results.Count - $Failed
+        failed         = $Failed
+        results        = @($Results | ForEach-Object {
+            [ordered]@{
+                id     = $_.Id
+                title  = $_.Title
+                passed = [bool]$_.Passed
+                detail = $_.Detail
+                mitre  = @($ById[$_.Id].mitre)
+            }
+        })
+    }
+    $Parent = Split-Path -Parent $Path
+    if ($Parent -and -not (Test-Path $Parent)) { New-Item -Path $Parent -ItemType Directory -Force | Out-Null }
+    ConvertTo-Json -InputObject $Report -Depth 6 | Set-Content -Path $Path -Encoding UTF8
+}
+
+# Groups the selected controls by ATT&CK technique. Returns one entry per technique ID with
+# the controls that mitigate it and the controls that detect it.
+function Get-CisAttackCoverage {
+    param([Parameter(Mandatory=$true)][object[]]$Controls)
+
+    $Coverage = @{}
+    foreach ($Control in $Controls) {
+        foreach ($Mapping in @($Control.mitre)) {
+            if (-not $Coverage.ContainsKey($Mapping.id)) {
+                $Coverage[$Mapping.id] = [pscustomobject]@{ Id = $Mapping.id; Mitigates = @(); Detects = @() }
+            }
+            if ($Mapping.relation -eq 'mitigates') {
+                $Coverage[$Mapping.id].Mitigates += $Control.id
+            } else {
+                $Coverage[$Mapping.id].Detects += $Control.id
             }
         }
     }
-    $FailCount
+    $Coverage.Values | Sort-Object Id
+}
+
+# Writes an ATT&CK Navigator layer for the selected controls.
+# Green = mitigated, blue = detected, teal = both. Comments list the control IDs.
+function Export-AttackLayer {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Controls,
+        [Parameter(Mandatory=$true)]$Catalog,
+        [Parameter(Mandatory=$true)][string]$Path,
+        [string]$Name = "CIS baseline $($Catalog.version) coverage"
+    )
+
+    $Colours = @{ mitigates = '#6fcf97'; detects = '#5aa9e6'; both = '#2bb5a8' }
+    $Coverage = @(Get-CisAttackCoverage -Controls $Controls)
+    $Ids = @($Coverage | ForEach-Object { $_.Id })
+
+    $Techniques = @()
+    foreach ($Entry in $Coverage) {
+        $Kind = if ($Entry.Mitigates.Count -and $Entry.Detects.Count) { 'both' } elseif ($Entry.Mitigates.Count) { 'mitigates' } else { 'detects' }
+        $Notes = @()
+        if ($Entry.Mitigates.Count) { $Notes += "Mitigated by: $($Entry.Mitigates -join ', ')" }
+        if ($Entry.Detects.Count)   { $Notes += "Detected by: $($Entry.Detects -join ', ')" }
+        $Techniques += [ordered]@{
+            techniqueID       = $Entry.Id
+            color             = $Colours[$Kind]
+            comment           = ($Notes -join '. ')
+            enabled           = $true
+            # Expand parents so mapped sub-techniques are visible in the matrix
+            showSubtechniques = [bool]($Ids | Where-Object { $_ -like "$($Entry.Id).*" })
+        }
+    }
+    # Parents of mapped sub-techniques that aren't mapped themselves still need expanding
+    foreach ($Parent in @($Ids | Where-Object { $_ -like '*.*' } | ForEach-Object { $_.Split('.')[0] } | Sort-Object -Unique)) {
+        if ($Parent -notin $Ids) {
+            $Techniques += [ordered]@{ techniqueID = $Parent; enabled = $true; showSubtechniques = $true }
+        }
+    }
+
+    $Layer = [ordered]@{
+        name        = $Name
+        versions    = [ordered]@{ attack = $Catalog.attackVersion; navigator = '5.1.0'; layer = '4.5' }
+        domain      = 'enterprise-attack'
+        description = "Techniques covered by $($Controls.Count) controls from catalog $($Catalog.version)."
+        techniques  = $Techniques
+        legendItems = @(
+            [ordered]@{ label = 'Mitigated by a control'; color = $Colours.mitigates },
+            [ordered]@{ label = 'Detected by a control';  color = $Colours.detects },
+            [ordered]@{ label = 'Mitigated and detected'; color = $Colours.both }
+        )
+        hideDisabled = $false
+        layout       = [ordered]@{ layout = 'side'; showID = $true; showName = $true }
+    }
+    $Parent = Split-Path -Parent $Path
+    if ($Parent -and -not (Test-Path $Parent)) { New-Item -Path $Parent -ItemType Directory -Force | Out-Null }
+    ConvertTo-Json -InputObject $Layer -Depth 6 | Set-Content -Path $Path -Encoding UTF8
+}
+
+# Builds a Markdown summary for the GitHub Actions job page. Pass $null for -Results when
+# the build stopped before the compliance test ran.
+function ConvertTo-CisSummaryMarkdown {
+    param(
+        [AllowNull()][object[]]$Results,
+        [Parameter(Mandatory=$true)][object[]]$Controls,
+        [Parameter(Mandatory=$true)]$Catalog
+    )
+
+    $ResultById = @{}
+    foreach ($Result in @($Results)) { if ($Result) { $ResultById[$Result.id] = $Result } }
+
+    $Lines = @("## CIS baseline $($Catalog.version)", "")
+    if ($ResultById.Count -eq 0) {
+        $Lines += "> **No compliance results.** The build stopped before the compliance test ran; see the build step log.", ""
+    } else {
+        $Failed = @($ResultById.Values | Where-Object { -not $_.passed }).Count
+        $Lines += "**$($ResultById.Count - $Failed) of $($ResultById.Count) controls passed.**", ""
+    }
+
+    $Lines += "| Result | Control | Title | ATT&CK |", "|---|---|---|---|"
+    foreach ($Control in $Controls) {
+        $Result = $ResultById[$Control.id]
+        # Pipes and line breaks in the failure detail would break the table row
+        $Detail = "$($Result.detail)" -replace '\|', '\|' -replace '\r?\n', ' '
+        $Status = if (-not $Result) { 'Not run' } elseif ($Result.passed) { 'Pass' } else { "**Fail**: $Detail" }
+        $Attack = (@($Control.mitre) | ForEach-Object { "$($_.id) ($($_.relation))" }) -join ', '
+        $Lines += "| $Status | $($Control.id) | $($Control.title) | $Attack |"
+    }
+
+    $Coverage = @(Get-CisAttackCoverage -Controls $Controls)
+    $Mitigated = @($Coverage | Where-Object { $_.Mitigates.Count }).Count
+    $Detected  = @($Coverage | Where-Object { $_.Detects.Count }).Count
+    $Lines += "", "**ATT&CK coverage (v$($Catalog.attackVersion)):** $($Coverage.Count) techniques; $Mitigated mitigated, $Detected detected. Download the ``compliance-evidence`` artifact and open ``attack-layer.json`` in the ATT&CK Navigator."
+    $Lines -join "`n"
 }
 
 Export-ModuleMember -Function Set-RegistryBaseline, Invoke-Native, Assert-CisSupportedRole, Get-CisCatalog,
-    Select-CisControl, Invoke-CisControl, Test-CisControl, Invoke-CisBaselineRun
+    Select-CisControl, Invoke-CisControl, Test-CisControl, Invoke-CisBaselineRun,
+    Export-CisComplianceReport, Get-CisAttackCoverage, Export-AttackLayer, ConvertTo-CisSummaryMarkdown

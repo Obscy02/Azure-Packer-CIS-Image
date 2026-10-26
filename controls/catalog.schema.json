@@ -2,10 +2,11 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "CIS baseline controls catalog",
   "type": "object",
-  "required": ["version", "controls"],
+  "required": ["version", "attackVersion", "controls"],
   "properties": {
     "$schema": { "type": "string" },
     "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "attackVersion": { "type": "string", "pattern": "^\\d+(\\.\\d+)?$" },
     "controls": {
       "type": "array",
       "minItems": 1,
@@ -42,7 +43,15 @@
         },
         "mitre": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" }
+          "items": {
+            "type": "object",
+            "required": ["id", "relation"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" },
+              "relation": { "type": "string", "enum": ["mitigates", "detects"] }
+            },
+            "additionalProperties": false
+          }
         },
         "enabledByDefault": { "type": "boolean" },
         "requiresReboot": { "type": "boolean" },

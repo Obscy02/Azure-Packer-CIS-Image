@@ -139,16 +139,93 @@ Describe 'Test-CisControl' {
 }
 
 Describe 'Invoke-CisBaselineRun' {
-    It 'returns the number of failed controls in Test mode' {
+    It 'returns one result per control in Test mode' {
         Mock -ModuleName CisBaseline Write-Host {}
-        Mock -ModuleName CisBaseline Test-CisControl { [pscustomobject]@{ Passed = ($Control.id -ne 'B-01'); Detail = 'x' } }
+        Mock -ModuleName CisBaseline Test-CisControl { [pscustomobject]@{ Id = $Control.id; Passed = ($Control.id -ne 'B-01'); Detail = 'x' } }
         $Controls = @((New-TestControl @{ id = 'A-01' }), (New-TestControl @{ id = 'B-01' }), (New-TestControl @{ id = 'C-01' }))
-        Invoke-CisBaselineRun -Mode Test -Controls $Controls -Context $Context | Should -Be 1
+        $Results = @(Invoke-CisBaselineRun -Mode Test -Controls $Controls -Context $Context)
+        $Results.Count | Should -Be 3
+        @($Results | Where-Object { -not $_.Passed }).Id | Should -Be 'B-01'
     }
 
-    It 'returns only 0 in Apply mode, even if a handler writes output' {
+    It 'returns nothing in Apply mode, even if a handler writes output' {
         Mock -ModuleName CisBaseline Write-Host {}
         Mock -ModuleName CisBaseline Invoke-CisControl { 'stray output' }
-        Invoke-CisBaselineRun -Mode Apply -Controls @(New-TestControl) -Context $Context | Should -Be 0
+        Invoke-CisBaselineRun -Mode Apply -Controls @(New-TestControl) -Context $Context | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Evidence exports' {
+    BeforeAll {
+        $Mini = [pscustomobject]@{
+            version = '9.9.9'; attackVersion = '16'
+            controls = @(
+                (New-TestControl @{ id = 'A-01'; mitre = @([pscustomobject]@{ id = 'T1557.001'; relation = 'mitigates' }) }),
+                (New-TestControl @{ id = 'B-01'; mitre = @(
+                    [pscustomobject]@{ id = 'T1557.001'; relation = 'detects' },
+                    [pscustomobject]@{ id = 'T1059'; relation = 'detects' }
+                ) }),
+                (New-TestControl @{ id = 'C-01'; mitre = @() })
+            )
+        }
+        $Results = @(
+            [pscustomobject]@{ Id = 'A-01'; Title = 'A'; Passed = $true;  Detail = '' },
+            [pscustomobject]@{ Id = 'B-01'; Title = 'B'; Passed = $false; Detail = 'Key = 0 | expected 1' },
+            [pscustomobject]@{ Id = 'C-01'; Title = 'C'; Passed = $true;  Detail = '' }
+        )
+    }
+
+    Context 'Export-AttackLayer' {
+        BeforeAll {
+            $LayerPath = Join-Path $TestDrive 'layer.json'
+            Export-AttackLayer -Controls $Mini.controls -Catalog $Mini -Path $LayerPath
+            $Layer = Get-Content $LayerPath -Raw | ConvertFrom-Json
+            $ById = @{}; foreach ($T in $Layer.techniques) { $ById[$T.techniqueID] = $T }
+        }
+
+        It 'is a Navigator layer for the catalog ATT&CK version' {
+            $Layer.domain | Should -Be 'enterprise-attack'
+            $Layer.versions.layer | Should -Be '4.5'
+            $Layer.versions.attack | Should -Be '16'
+        }
+
+        It 'merges mitigating and detecting controls on one technique' {
+            $ById['T1557.001'].color | Should -Be '#2bb5a8'
+            $ById['T1557.001'].comment | Should -Be 'Mitigated by: A-01. Detected by: B-01'
+        }
+
+        It 'colours detect-only techniques differently' {
+            $ById['T1059'].color | Should -Be '#5aa9e6'
+        }
+
+        It 'expands the parent of a mapped sub-technique' {
+            $ById['T1557'].showSubtechniques | Should -BeTrue
+            $ById['T1557'].PSObject.Properties.Name | Should -Not -Contain 'color'
+        }
+    }
+
+    Context 'Export-CisComplianceReport' {
+        It 'counts passes and failures and includes the ATT&CK mappings' {
+            $Path = Join-Path $TestDrive 'out/results.json'
+            Export-CisComplianceReport -Results $Results -Catalog $Mini -Os ws2022 -Level 1 -Path $Path
+            $Report = Get-Content $Path -Raw | ConvertFrom-Json
+            $Report.passed | Should -Be 2
+            $Report.failed | Should -Be 1
+            $Report.catalogVersion | Should -Be '9.9.9'
+            ($Report.results | Where-Object id -eq 'B-01').mitre.Count | Should -Be 2
+        }
+    }
+
+    Context 'ConvertTo-CisSummaryMarkdown' {
+        It 'has a row per control and escapes pipes in failure details' {
+            $Md = ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Mini.controls -Catalog $Mini
+            $Md | Should -BeLike '*2 of 3 controls passed*'
+            ($Md -split "`n" | Where-Object { $_ -match '^\| .* \| [A-C]-01 \|' }).Count | Should -Be 3
+            $Md | Should -BeLike '*Key = 0 \| expected 1*'
+        }
+
+        It 'says so when there are no results' {
+            ConvertTo-CisSummaryMarkdown -Results $null -Controls $Mini.controls -Catalog $Mini | Should -BeLike '*No compliance results*'
+        }
     }
 }

@@ -59,9 +59,19 @@ I also built in a few safeguards against unattended runs going wrong. The engine
 
 ### The compliance check
 
-In Test mode, the engine checks every selected control against the rebooted VM and prints `[PASS]` or `[FAIL]` for each one, with the actual and expected values when something is wrong. A single failure makes it exit with code 1, which stops Packer before Sysprep, so a broken image never gets published.
+In Test mode, the engine checks every selected control against the rebooted VM and prints `[PASS]` or `[FAIL]` for each one, with the actual and expected values when something is wrong. The results are saved as JSON and copied back off the VM before a separate gate step decides whether to continue. A single failure stops Packer before Sysprep, so a broken image never gets published, but you still get the report showing exactly what failed.
+
+Every build run also publishes its evidence. The Actions run page shows a summary table of each control's result and ATT&CK mappings, and a `compliance-evidence` artifact contains the results JSON and an ATT&CK Navigator layer.
 
 The catalog itself is tested too. On every push to `dev`, a free GitHub Actions workflow validates it against a JSON schema, runs Pester unit tests on the engine, lints the PowerShell, and runs `packer validate`, all without logging into Azure.
+
+### ATT&CK coverage
+
+Each control lists the MITRE ATT&CK techniques it relates to, and whether it **mitigates** the technique or helps **detect** it. I kept that distinction deliberately. Turning off WDigest stops plaintext passwords being dumped from LSASS (T1003.001), so it mitigates. PowerShell script block logging doesn't stop malicious PowerShell (T1059.001), it records it, so it only detects. A few controls, like the Security log size, don't map honestly to a single technique, so they have no mapping rather than a stretched one.
+
+From the selected controls, each build generates an ATT&CK Navigator layer: green for mitigated, blue for detected, and teal for both, with a comment listing which controls cover each technique. To view it, download the `compliance-evidence` artifact from a build run, open the [ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/), choose **Open Existing Layer → Upload from local**, and pick `attack-layer.json`.
+
+The mappings are against ATT&CK Enterprise v16, and a test checks every technique ID against a reviewed list so a typo can't slip in.
 
 ### No stored credentials
 
@@ -147,9 +157,7 @@ If your subscription isn't a student one, you'll probably want a different regio
 
 There's plenty I'd like to do with this:
 
-- Map each control to the **MITRE ATT&CK** techniques it defends against, and produce a coverage report with each build. For example, turning off WDigest helps against LSASS credential dumping (T1003.001), disabling LLMNR and NetBIOS stops poisoning attacks (T1557.001), and SMB signing blocks relay attacks (T1557).
 - Build a simple **web front end** where you pick the OS (Server 2019, 2022 or 2025), the benchmark (CIS or DISA STIG) and the level (L1 or L2), and it runs the pipeline with those choices.
 - Let it **generate the infrastructure code** for the chosen baseline (Packer, Bicep or Terraform), so other teams can drop it into their own pipelines.
 - Publish to an **Azure Compute Gallery** with version numbers instead of overwriting one image.
 - Rebuild **monthly** so the image always has the latest Windows updates.
-- Save the compliance results as a **build artifact** to use as audit evidence.

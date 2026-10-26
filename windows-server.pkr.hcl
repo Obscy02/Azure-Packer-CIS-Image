@@ -97,12 +97,29 @@ build {
     restart_timeout = "10m"
   }
 
-  # 4. Test every selected control (exits 1 and aborts the build if any fail)
+  # 4. Test every selected control and save the results. -ReportOnly keeps the build going
+  #    so the results can be downloaded even when controls fail; step 6 enforces the result.
   provisioner "powershell" {
-    inline = ["& C:\\cis\\scripts\\Invoke-CisBaseline.ps1 -Mode Test ${local.baseline_args}"]
+    inline = ["& C:\\cis\\scripts\\Invoke-CisBaseline.ps1 -Mode Test ${local.baseline_args} -ResultsPath C:\\cis\\results.json -ReportOnly"]
   }
 
-  # 5. Generalize OS via Sysprep so Azure can capture the Golden Image
+  # 5. Bring the results back to the runner as build evidence
+  provisioner "file" {
+    direction   = "download"
+    source      = "C:\\cis\\results.json"
+    destination = "artifacts/compliance-results.json"
+  }
+
+  # 6. Compliance gate: abort before Sysprep if any control failed, so the image is never captured
+  provisioner "powershell" {
+    inline = [
+      "$Report = Get-Content C:\\cis\\results.json -Raw | ConvertFrom-Json",
+      "if ($Report.failed -gt 0) { Write-Host ('Compliance gate: ' + $Report.failed + ' control(s) failed'); exit 1 }",
+      "Write-Host ('Compliance gate: all ' + $Report.passed + ' controls passed')"
+    ]
+  }
+
+  # 7. Generalize OS via Sysprep so Azure can capture the Golden Image
   provisioner "powershell" {
     inline = [
       "& $env:SystemRoot\\System32\\Sysprep\\sysprep.exe /oobe /generalize /quit /quiet",

@@ -5,6 +5,8 @@
 .DESCRIPTION
     -Mode Apply  hardens the machine using the selected controls.
     -Mode Test   checks every selected control and exits 1 if any fail, which halts the Packer build.
+                 -ResultsPath also writes the results as JSON evidence. -ReportOnly exits 0 even when
+                 controls fail, so the results can be collected before a separate gate step fails the build.
 
     Controls are selected by OS and CIS level. Opt-in controls (enabledByDefault = false) only run
     when listed in -Include; any control can be skipped with -Exclude.
@@ -22,6 +24,8 @@ param(
     [string]$Platform,
     [string[]]$Include = @(),
     [string[]]$Exclude = @(),
+    [string]$ResultsPath,
+    [switch]$ReportOnly,
     [string]$CatalogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'controls\catalog.json')
 )
 
@@ -53,16 +57,23 @@ try {
     Write-Host " CIS baseline $($Catalog.version): $Mode ($Os, Level $Level, $($Controls.Count) controls)" -ForegroundColor Cyan
     Write-Host "=========================================" -ForegroundColor Cyan
 
-    $FailCount = Invoke-CisBaselineRun -Mode $Mode -Controls $Controls -Context $Context
+    $Results = @(Invoke-CisBaselineRun -Mode $Mode -Controls $Controls -Context $Context)
 
     Write-Host "=========================================" -ForegroundColor Cyan
     if ($Mode -eq 'Apply') {
         Write-Host "[+] Baseline applied. REBOOT REQUIRED for LSA protection, Schannel and feature removals." -ForegroundColor Green
-    } elseif ($FailCount -eq 0) {
-        Write-Host " RESULT: ALL $($Controls.Count) CONTROLS PASSED." -ForegroundColor Green
     } else {
-        Write-Host " RESULT: $FailCount OF $($Controls.Count) CONTROLS FAILED." -ForegroundColor Red
-        $ExitCode = 1
+        if ($ResultsPath) {
+            Export-CisComplianceReport -Results $Results -Catalog $Catalog -Os $Os -Level $Level -Path $ResultsPath
+            Write-Host " Results written to $ResultsPath"
+        }
+        $FailCount = @($Results | Where-Object { -not $_.Passed }).Count
+        if ($FailCount -eq 0) {
+            Write-Host " RESULT: ALL $($Controls.Count) CONTROLS PASSED." -ForegroundColor Green
+        } else {
+            Write-Host " RESULT: $FailCount OF $($Controls.Count) CONTROLS FAILED." -ForegroundColor Red
+            if (-not $ReportOnly) { $ExitCode = 1 }
+        }
     }
 }
 catch {

@@ -26,6 +26,10 @@ permissions:
 jobs:
   packer-build:
     runs-on: ubuntu-latest
+    env:
+      # Baseline profile, shared by the Packer build and the evidence steps below
+      PKR_VAR_os: ws2022
+      PKR_VAR_cis_level: 1
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -55,4 +59,27 @@ jobs:
           PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PKR_VAR_vm_size: ${{ inputs.vm_size || 'Standard_DS1_v2' }}
         # -force replaces the existing managed image; without it every build after the first fails
-        run: packer build -force -color=false windows-server.pkr.hcl
+        run: |
+          mkdir -p artifacts
+          packer build -force -color=false windows-server.pkr.hcl
+
+      # Evidence steps run even when the build fails, so a failed compliance test is still reported
+      - name: Export ATT&CK layer and job summary
+        if: always()
+        shell: pwsh
+        run: |
+          Import-Module ./engine/CisBaseline.psm1
+          $Catalog  = Get-CisCatalog -Path ./controls/catalog.json
+          $Controls = @(Select-CisControl -Catalog $Catalog -Os $env:PKR_VAR_os -Level $env:PKR_VAR_cis_level -Platform azure)
+          Export-AttackLayer -Controls $Controls -Catalog $Catalog -Path ./artifacts/attack-layer.json
+          $ResultsFile = './artifacts/compliance-results.json'
+          $Results = if (Test-Path $ResultsFile) { (Get-Content $ResultsFile -Raw | ConvertFrom-Json).results } else { $null }
+          ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Controls -Catalog $Catalog >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload compliance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-evidence
+          path: artifacts/
+          if-no-files-found: warn
