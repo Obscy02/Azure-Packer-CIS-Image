@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CIS baseline controls catalog",
+  "type": "object",
+  "required": ["version", "controls"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "controls": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/control" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "control": {
+      "type": "object",
+      "required": ["id", "title", "area", "cis", "os", "platforms", "mitre", "enabledByDefault", "requiresReboot", "type", "rationale"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Z]+-\\d{2}$" },
+        "title": { "type": "string", "minLength": 1 },
+        "area": { "type": "string", "minLength": 1 },
+        "cis": {
+          "type": "object",
+          "required": ["ref", "level"],
+          "properties": {
+            "ref": { "type": "string" },
+            "level": { "type": "integer", "enum": [1, 2] }
+          },
+          "additionalProperties": false
+        },
+        "os": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["ws2019", "ws2022", "ws2025"] }
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["azure", "vsphere", "hyperv"] }
+        },
+        "mitre": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$" }
+        },
+        "enabledByDefault": { "type": "boolean" },
+        "requiresReboot": { "type": "boolean" },
+        "type": { "type": "string", "enum": ["registry", "feature", "service", "auditpol", "eventlog", "script"] },
+        "rationale": { "type": "string", "minLength": 1 },
+        "settings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["path", "name", "value"],
+            "properties": {
+              "path": { "type": "string", "pattern": "^HKLM:\\\\" },
+              "name": { "type": "string" },
+              "value": { "type": ["integer", "string"] },
+              "kind": { "type": "string", "enum": ["DWord", "QWord", "String"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "feature": { "type": "string" },
+        "service": { "type": "string" },
+        "startupType": { "type": "string", "enum": ["Disabled", "Manual", "Automatic"] },
+        "subcategories": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["guid", "name", "success", "failure"],
+            "properties": {
+              "guid": { "type": "string", "pattern": "^\\{[0-9A-F-]{36}\\}$" },
+              "name": { "type": "string" },
+              "success": { "type": "boolean" },
+              "failure": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "log": { "type": "string" },
+        "maxSizeBytes": { "type": "integer", "minimum": 1 },
+        "apply": { "type": "string", "pattern": "^scripts/.+\\.ps1$" },
+        "test": { "type": "string", "pattern": "^scripts/.+\\.ps1$" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "registry" } } }, "then": { "required": ["settings"] } },
+        { "if": { "properties": { "type": { "const": "feature" } } }, "then": { "required": ["feature"] } },
+        { "if": { "properties": { "type": { "const": "service" } } }, "then": { "required": ["service", "startupType"] } },
+        { "if": { "properties": { "type": { "const": "auditpol" } } }, "then": { "required": ["subcategories"] } },
+        { "if": { "properties": { "type": { "const": "eventlog" } } }, "then": { "required": ["log", "maxSizeBytes"] } },
+        { "if": { "properties": { "type": { "const": "script" } } }, "then": { "required": ["apply", "test"] } }
+      ]
+    }
+  }
+}

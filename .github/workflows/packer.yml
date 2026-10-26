@@ -3,6 +3,12 @@ name: Build CIS Windows Golden Image
 on:
   push:
     branches: [ main ]
+    paths:
+    - 'windows-server.pkr.hcl'
+    - 'scripts/**'
+    - 'engine/**'
+    - 'controls/**'
+    - '.github/workflows/packer.yml'
   workflow_dispatch:
     inputs:
       vm_size:
@@ -48,4 +54,5 @@ jobs:
         env:
           PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PKR_VAR_vm_size: ${{ inputs.vm_size || 'Standard_DS1_v2' }}
-        run: packer build -color=false windows-server.pkr.hcl
+        # -force replaces the existing managed image; without it every build after the first fails
+        run: packer build -force -color=false windows-server.pkr.hcl

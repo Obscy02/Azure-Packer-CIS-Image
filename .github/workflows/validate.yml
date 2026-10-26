@@ -1,0 +1,48 @@
+name: Validate
+
+# Fast, free checks for work in progress. No Azure login, no VM.
+on:
+  push:
+    branches: [ dev ]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install PowerShell modules
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          $Config = New-PesterConfiguration
+          $Config.Run.Path = './tests'
+          $Config.Run.Exit = $true
+          $Config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $Config
+
+      - name: Lint PowerShell
+        shell: pwsh
+        run: |
+          $Results = 'engine', 'scripts/Invoke-CisBaseline.ps1', 'controls/scripts' |
+            ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 }
+          $Results | Format-Table -AutoSize
+          if ($Results) { exit 1 }
+
+      - name: Setup HashiCorp Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "latest"
+
+      - name: Validate Packer Template
+        run: |
+          packer init windows-server.pkr.hcl
+          packer validate -var "subscription_id=00000000-0000-0000-0000-000000000000" windows-server.pkr.hcl

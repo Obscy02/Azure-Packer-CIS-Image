@@ -23,6 +23,35 @@ variable "resource_group_name" {
   default = "rg-devsecops-lab"
 }
 
+# Which controls to apply from controls/catalog.json
+variable "os" {
+  type    = string
+  default = "ws2022"
+
+  validation {
+    condition     = contains(["ws2022"], var.os)
+    error_message = "The os must be one the catalog has been tested on: ws2022."
+  }
+}
+
+variable "cis_level" {
+  type    = number
+  default = 1
+
+  validation {
+    condition     = contains([1, 2], var.cis_level)
+    error_message = "The cis_level must be 1 or 2."
+  }
+}
+
+locals {
+  # Marketplace image for each OS the catalog supports
+  image_skus = {
+    ws2022 = "2022-datacenter-g2"
+  }
+  baseline_args = "-Os ${var.os} -Level ${var.cis_level} -Platform azure"
+}
+
 source "azure-arm" "windows2022" {
   use_azure_cli_auth = true
   subscription_id    = var.subscription_id
@@ -34,7 +63,7 @@ source "azure-arm" "windows2022" {
   os_type         = "Windows"
   image_publisher = "MicrosoftWindowsServer"
   image_offer     = "WindowsServer"
-  image_sku       = "2022-datacenter-g2"
+  image_sku       = local.image_skus[var.os]
 
   communicator   = "winrm"
   winrm_use_ssl  = true
@@ -48,22 +77,32 @@ source "azure-arm" "windows2022" {
 build {
   sources = ["source.azure-arm.windows2022"]
 
-  # 1. Run the Enterprise Hardening Script
+  # 1. Upload the baseline engine, controls catalog and entry script to C:\cis
   provisioner "powershell" {
-    script = "./scripts/CIShardening.ps1"
+    inline = ["New-Item -Path C:\\cis -ItemType Directory -Force | Out-Null"]
   }
 
-  # 2. Reboot VM so RunAsPPL, Schannel, and feature removals take effect
+  provisioner "file" {
+    sources     = ["./engine", "./controls", "./scripts"]
+    destination = "C:\\cis\\"
+  }
+
+  # 2. Apply the selected controls
+  provisioner "powershell" {
+    inline = ["& C:\\cis\\scripts\\Invoke-CisBaseline.ps1 -Mode Apply ${local.baseline_args}"]
+  }
+
+  # 3. Reboot VM so RunAsPPL, Schannel, and feature removals take effect
   provisioner "windows-restart" {
     restart_timeout = "10m"
   }
 
-  # 3. Run the Compliance Validation Script (Aborts build if any check fails)
+  # 4. Test every selected control (exits 1 and aborts the build if any fail)
   provisioner "powershell" {
-    script = "./scripts/Test-CisCompliance.ps1"
+    inline = ["& C:\\cis\\scripts\\Invoke-CisBaseline.ps1 -Mode Test ${local.baseline_args}"]
   }
 
-  # 4. Generalize OS via Sysprep so Azure can capture the Golden Image
+  # 5. Generalize OS via Sysprep so Azure can capture the Golden Image
   provisioner "powershell" {
     inline = [
       "& $env:SystemRoot\\System32\\Sysprep\\sysprep.exe /oobe /generalize /quit /quiet",
