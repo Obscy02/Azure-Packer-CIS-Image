@@ -20,18 +20,18 @@ flowchart LR
     B -- OIDC token --> C[Microsoft Entra ID<br/>federated credential]
     C -- access token --> D[User-assigned<br/>managed identity]
     D --> E[Packer: temporary<br/>build VM]
-    E --> F[CIShardening.ps1]
+    E --> F[Invoke-CisBaseline.ps1<br/>-Mode Apply]
     F --> G[Reboot]
-    G --> H{Test-CisCompliance.ps1<br/>14 checks}
+    G --> H{Invoke-CisBaseline.ps1<br/>-Mode Test}
     H -- any FAIL --> X[Build aborted<br/>no image published]
     H -- all PASS --> I[Sysprep generalize]
     I --> J[Managed image<br/>win2022-cis-gold-v1]
     J --> K[Temporary resources<br/>destroyed]
 ```
 
-When I push to `main` (or start the workflow by hand), GitHub Actions trades its OIDC token for an Azure access token through a federated credential on a managed identity. Packer then creates a temporary resource group, Key Vault and Windows Server 2022 VM in `belgiumcentral`, and runs `CIShardening.ps1` on it over WinRM.
+When I push to `main` (or start the workflow by hand), GitHub Actions trades its OIDC token for an Azure access token through a federated credential on a managed identity. Packer then creates a temporary resource group, Key Vault and Windows Server 2022 VM in `belgiumcentral`. It uploads the baseline engine and controls catalog to the VM over WinRM and runs it in Apply mode.
 
-After that, the VM reboots. Some of the settings, such as LSA protection, the TLS changes and the removed features, only take effect after a restart, so I check them on the rebooted system rather than trusting the script's output. `Test-CisCompliance.ps1` runs next, and if any check fails, the build stops there. If everything passes, Sysprep generalises the VM, Packer captures it as a managed image, and the temporary resources are deleted.
+After that, the VM reboots. Some of the settings, such as LSA protection, the TLS changes and the removed features, only take effect after a restart, so I check them on the rebooted system rather than trusting the script's output. The engine runs again in Test mode, and if any control fails, the build stops there. If everything passes, Sysprep generalises the VM, Packer captures it as a managed image, and the temporary resources are deleted.
 
 ### A passing build
 
@@ -39,7 +39,9 @@ After that, the VM reboots. Some of the settings, such as LSA protection, the TL
 
 ## What gets hardened
 
-The hardening script is split into nine areas:
+Every control is defined once, as data, in [`controls/catalog.json`](controls/catalog.json). A single PowerShell engine reads that catalog to both apply and test each control, so the hardening and the compliance check can never disagree. Most controls are plain data (a registry value, a Windows feature, a service, an audit setting or a log size), and the few that need custom logic point to a small script in `controls/scripts/`.
+
+The catalog currently covers these areas:
 
 | # | Area | What it does |
 |---|------|--------------|
@@ -50,14 +52,16 @@ The hardening script is split into nine areas:
 | 5 | Remote Desktop | NLA required, TLS security layer, high encryption, drive redirection off |
 | 6 | PowerShell logging | Script block and module logging on, Operational log raised to 256 MB |
 | 7 | Cryptography | SSL 2.0/3.0 and TLS 1.0/1.1 off, TLS 1.2 enforced, .NET strong crypto (x64 and x86) |
-| 8 | User rights | Deny network logon for Guests and local accounts (opt-in with `-ApplyUserRights`, since in a domain this belongs in Group Policy) |
+| 8 | User rights | Deny network logon for Guests and local accounts (opt-in with `-Include URA-01`, since in a domain this belongs in Group Policy) |
 | 9 | Auditing and services | Advanced audit policy subcategories, command-line process auditing, 1 GB Security log, Print Spooler off, baseline version stamp |
 
-I also built in a few safeguards against unattended runs going wrong. The script checks the machine's role first and refuses to run on a workstation or a domain controller. Windows command-line tools like `auditpol` and `wevtutil` don't always report failures in a way PowerShell notices, so I wrapped them: a non-zero exit code now fails the build instead of being silently ignored. Every run writes a full transcript to `C:\Windows\Temp\cis-hardening.log`. Finally, the image gets a baseline version and build date stamped in the registry, so you can tell later which baseline a server started from.
+I also built in a few safeguards against unattended runs going wrong. The engine checks the machine's role first and refuses to run on a workstation or a domain controller. Windows command-line tools like `auditpol` and `wevtutil` don't always report failures in a way PowerShell notices, so I wrapped them: a non-zero exit code now fails the build instead of being silently ignored. Every run writes a full transcript to `C:\Windows\Temp\cis-baseline-apply.log` (or `-test.log`). Finally, the image gets a baseline version and build date stamped in the registry, so you can tell later which baseline a server started from.
 
 ### The compliance check
 
-`Test-CisCompliance.ps1` runs 14 checks against the rebooted VM and prints `[PASS]` or `[FAIL]` for each one. A single failure makes it exit with code 1, which stops Packer before Sysprep, so a broken image never gets published.
+In Test mode, the engine checks every selected control against the rebooted VM and prints `[PASS]` or `[FAIL]` for each one, with the actual and expected values when something is wrong. A single failure makes it exit with code 1, which stops Packer before Sysprep, so a broken image never gets published.
+
+The catalog itself is tested too. On every push to `dev`, a free GitHub Actions workflow validates it against a JSON schema, runs Pester unit tests on the engine, lints the PowerShell, and runs `packer validate`, all without logging into Azure.
 
 ### No stored credentials
 
@@ -68,10 +72,17 @@ The pipeline logs in with OIDC workload identity federation and a user-assigned 
 ```text
 ├── .github/
 │   └── workflows/
-│       └── packer.yml            # GitHub Actions pipeline (OIDC login, Packer init/validate/build)
+│       ├── packer.yml            # Image build (OIDC login, Packer init/validate/build)
+│       └── validate.yml          # Free checks on dev: tests, lint, packer validate
+├── controls/
+│   ├── catalog.json              # Every control, the single source of truth
+│   ├── catalog.schema.json       # Schema the catalog is validated against
+│   └── scripts/                  # Apply/test scripts for controls that need custom logic
+├── engine/
+│   └── CisBaseline.psm1          # Loads, filters, applies and tests controls
 ├── scripts/
-│   ├── CIShardening.ps1          # CIS Level 1 hardening baseline
-│   └── Test-CisCompliance.ps1    # 14-point compliance check (exit 1 on any failure)
+│   └── Invoke-CisBaseline.ps1    # Entry point: -Mode Apply|Test -Os -Level
+├── tests/                        # Pester tests for the catalog and engine
 ├── windows-server.pkr.hcl        # Packer azure-arm template
 └── README.md
 ```
@@ -142,4 +153,3 @@ There's plenty I'd like to do with this:
 - Publish to an **Azure Compute Gallery** with version numbers instead of overwriting one image.
 - Rebuild **monthly** so the image always has the latest Windows updates.
 - Save the compliance results as a **build artifact** to use as audit evidence.
-- Add the audit policy and Security log size to the compliance check. They're applied, but not checked yet.
