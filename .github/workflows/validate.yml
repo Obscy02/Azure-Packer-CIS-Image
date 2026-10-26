@@ -17,8 +17,16 @@ jobs:
         shell: pwsh
         run: |
           Set-PSRepository PSGallery -InstallationPolicy Trusted
-          Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser -Force -SkipPublisherCheck
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          # The PowerShell Gallery occasionally fails a download, so retry before giving up
+          function Install-WithRetry([string]$Name, [hashtable]$Extra = @{}) {
+            for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+              try { Install-Module -Name $Name -Scope CurrentUser -Force @Extra -ErrorAction Stop; return }
+              catch { Write-Warning "Installing $Name failed (attempt $Attempt): $_"; Start-Sleep -Seconds (10 * $Attempt) }
+            }
+            throw "Could not install $Name"
+          }
+          Install-WithRetry Pester @{ MinimumVersion = '5.5'; SkipPublisherCheck = $true }
+          Install-WithRetry PSScriptAnalyzer
 
       - name: Run Pester tests
         shell: pwsh
