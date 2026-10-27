@@ -39,12 +39,25 @@ function Invoke-Native {
     if ($PassThru) { $Output }
 }
 
-# Role Guard: Allow only Standalone Server (2) or Member Server (3). Abort on Workstations (0/1) or DCs (4/5).
+# Role Guard: the chosen profile must match the machine. Member server profile (ms) needs a
+# Standalone (2) or Member Server (3); domain controller profile (dc) needs a DC (4/5). Workstations (0/1) are refused.
+function Get-CisDomainRole {
+    (Get-CimInstance -ClassName Win32_ComputerSystem).DomainRole
+}
+
 function Assert-CisSupportedRole {
-    $DomainRole = (Get-CimInstance -ClassName Win32_ComputerSystem).DomainRole
-    if ($DomainRole -notin @(2, 3)) {
-        throw "ABORTING: Server role $DomainRole is not a Standalone Server (2) or Member Server (3)."
+    param([ValidateSet('ms', 'dc')][string]$Role = 'ms')
+
+    $DomainRole = Get-CisDomainRole
+    $Allowed = @{ ms = @(2, 3); dc = @(4, 5) }
+    if ($DomainRole -in $Allowed[$Role]) { return }
+
+    $Hint = switch ($DomainRole) {
+        { $_ -in 4, 5 } { "This machine is a domain controller; use -Role dc." }
+        { $_ -in 2, 3 } { "This machine is not a domain controller; use -Role ms." }
+        default         { "This machine is a workstation, which this baseline doesn't support." }
     }
+    throw "ABORTING: profile '$Role' doesn't match this machine (DomainRole $DomainRole). $Hint"
 }
 
 function Get-CisCatalog {
@@ -57,14 +70,23 @@ function Get-CisCatalog {
     $Catalog
 }
 
+# CIS recommendation numbers for a control on one OS. Empty means it's extra hardening there.
+function Get-CisRef {
+    param([Parameter(Mandatory=$true)]$Control, [Parameter(Mandatory=$true)][string]$Os)
+    if ($Control.cis -and $Control.cis.$Os) { @($Control.cis.$Os) } else { @() }
+}
+
 function Select-CisControl {
     param(
         [Parameter(Mandatory=$true)]$Catalog,
         [Parameter(Mandatory=$true)][string]$Os,
         [ValidateSet(1, 2)][int]$Level = 1,
+        [ValidateSet('ms', 'dc')][string]$Role = 'ms',
         [string]$Platform,
         [string[]]$Include = @(),
-        [string[]]$Exclude = @()
+        [string[]]$Exclude = @(),
+        # Drop controls that aren't a CIS recommendation on this OS (extra hardening)
+        [switch]$CisOnly
     )
 
     $KnownIds = @($Catalog.controls | ForEach-Object { $_.id })
@@ -76,8 +98,10 @@ function Select-CisControl {
     # Level 2 includes everything in Level 1. Opt-in controls only run when explicitly included.
     @($Catalog.controls | Where-Object {
         ($_.os -contains $Os) -and
-        ($_.cis.level -le $Level) -and
+        ($_.roles -contains $Role) -and
+        ($_.level -le $Level) -and
         ((-not $Platform) -or ($_.platforms -contains $Platform)) -and
+        ((-not $CisOnly) -or (Get-CisRef -Control $_ -Os $Os)) -and
         ($_.id -notin $Exclude) -and
         ($_.enabledByDefault -or ($_.id -in $Include))
     })
@@ -91,6 +115,15 @@ function Get-RegistryKind {
 function Get-ControlScriptPath {
     param($Control, $Context, [string]$Stage)
     Join-Path -Path $Context.ControlsRoot -ChildPath $Control.$Stage
+}
+
+# Runs a script control's apply or test file. Controls that share a script pass their
+# own settings through "parameters", e.g. the SIDs for URA-01 and URA-02.
+function Invoke-ControlScript {
+    param($Control, $Context, [string]$Stage)
+    $ScriptArgs = @{ Context = $Context }
+    if ($Control.parameters) { $ScriptArgs.Parameters = $Control.parameters }
+    & (Get-ControlScriptPath $Control $Context $Stage) @ScriptArgs
 }
 
 function Invoke-CisControl {
@@ -133,7 +166,7 @@ function Invoke-CisControl {
             Invoke-Native { wevtutil.exe sl "$($Control.log)" "/ms:$($Control.maxSizeBytes)" } "Resize of $($Control.log) log"
         }
         'script' {
-            & (Get-ControlScriptPath $Control $Context 'apply') -Context $Context | Out-Null
+            Invoke-ControlScript $Control $Context 'apply' | Out-Null
         }
         default {
             throw "Control $($Control.id) has unknown type '$($Control.type)'"
@@ -205,7 +238,7 @@ function Test-CisControl {
                 }
             }
             'script' {
-                $Result = & (Get-ControlScriptPath $Control $Context 'test') -Context $Context | Select-Object -Last 1
+                $Result = Invoke-ControlScript $Control $Context 'test' | Select-Object -Last 1
                 if (-not $Result) {
                     $Problems += "Test script returned false"
                 }
@@ -268,6 +301,7 @@ function Export-CisComplianceReport {
         [Parameter(Mandatory=$true)]$Catalog,
         [Parameter(Mandatory=$true)][string]$Os,
         [Parameter(Mandatory=$true)][int]$Level,
+        [ValidateSet('ms', 'dc')][string]$Role = 'ms',
         [Parameter(Mandatory=$true)][string]$Path
     )
 
@@ -276,7 +310,9 @@ function Export-CisComplianceReport {
     $Report = [ordered]@{
         catalogVersion = $Catalog.version
         attackVersion  = $Catalog.attackVersion
+        benchmark      = $Catalog.benchmarks.$Os
         os             = $Os
+        role           = $Role
         level          = $Level
         generatedAt    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         passed         = $Results.Count - $Failed
@@ -287,6 +323,7 @@ function Export-CisComplianceReport {
                 title  = $_.Title
                 passed = [bool]$_.Passed
                 detail = $_.Detail
+                cis    = @(Get-CisRef -Control $ById[$_.Id] -Os $Os)
                 mitre  = @($ById[$_.Id].mitre)
             }
         })
@@ -378,13 +415,19 @@ function ConvertTo-CisSummaryMarkdown {
     param(
         [AllowNull()][object[]]$Results,
         [Parameter(Mandatory=$true)][object[]]$Controls,
-        [Parameter(Mandatory=$true)]$Catalog
+        [Parameter(Mandatory=$true)]$Catalog,
+        [Parameter(Mandatory=$true)][string]$Os,
+        # Shown in the heading, e.g. "DC L1"
+        [string]$ProfileName
     )
 
     $ResultById = @{}
     foreach ($Result in @($Results)) { if ($Result) { $ResultById[$Result.id] = $Result } }
 
-    $Lines = @("## CIS baseline $($Catalog.version)", "")
+    $Heading = "## CIS baseline $($Catalog.version)"
+    if ($ProfileName) { $Heading += " ($ProfileName)" }
+    $Lines = @($Heading, "")
+    if ($Catalog.benchmarks.$Os) { $Lines += "Benchmark: $($Catalog.benchmarks.$Os). Controls marked *Hardening* go beyond it.", "" }
     if ($ResultById.Count -eq 0) {
         $Lines += "> **No compliance results.** The build stopped before the compliance test ran; see the build step log.", ""
     } else {
@@ -392,14 +435,16 @@ function ConvertTo-CisSummaryMarkdown {
         $Lines += "**$($ResultById.Count - $Failed) of $($ResultById.Count) controls passed.**", ""
     }
 
-    $Lines += "| Result | Control | Title | ATT&CK |", "|---|---|---|---|"
+    $Lines += "| Result | Control | CIS | Title | ATT&CK |", "|---|---|---|---|---|"
     foreach ($Control in $Controls) {
         $Result = $ResultById[$Control.id]
         # Pipes and line breaks in the failure detail would break the table row
         $Detail = "$($Result.detail)" -replace '\|', '\|' -replace '\r?\n', ' '
         $Status = if (-not $Result) { 'Not run' } elseif ($Result.passed) { 'Pass' } else { "**Fail**: $Detail" }
         $Attack = (@($Control.mitre) | ForEach-Object { "$($_.id) ($($_.relation))" }) -join ', '
-        $Lines += "| $Status | $($Control.id) | $($Control.title) | $Attack |"
+        $Refs = @(Get-CisRef -Control $Control -Os $Os)
+        $Cis = if ($Refs.Count) { $Refs -join ', ' } else { '*Hardening*' }
+        $Lines += "| $Status | $($Control.id) | $Cis | $($Control.title) | $Attack |"
     }
 
     $Coverage = @(Get-CisAttackCoverage -Controls $Controls)
@@ -410,5 +455,5 @@ function ConvertTo-CisSummaryMarkdown {
 }
 
 Export-ModuleMember -Function Set-RegistryBaseline, Invoke-Native, Assert-CisSupportedRole, Get-CisCatalog,
-    Select-CisControl, Invoke-CisControl, Test-CisControl, Invoke-CisBaselineRun,
+    Get-CisRef, Select-CisControl, Invoke-CisControl, Test-CisControl, Invoke-CisBaselineRun,
     Export-CisComplianceReport, Get-CisAttackCoverage, Export-AttackLayer, ConvertTo-CisSummaryMarkdown

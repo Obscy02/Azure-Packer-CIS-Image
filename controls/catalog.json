@@ -1,14 +1,18 @@
 {
   "$schema": "./catalog.schema.json",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "attackVersion": "16",
+  "benchmarks": {
+    "ws2022": "CIS Microsoft Windows Server 2022 Benchmark v5.1.0"
+  },
   "controls": [
     {
       "id": "CRED-01",
       "title": "Run LSASS as a protected process (LSA protection)",
       "area": "Credential protection",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1003.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -17,14 +21,15 @@
       "settings": [
         { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa", "name": "RunAsPPL", "value": 1 }
       ],
-      "rationale": "Stops non-protected processes, including most credential dumping tools, from reading LSASS memory."
+      "rationale": "Stops non-protected processes, including most credential dumping tools, from reading LSASS memory. CIS only lists this under its Next Generation Windows Security profile (18.9.27.2), so it's applied here as extra hardening."
     },
     {
       "id": "CRED-02",
       "title": "Disable WDigest cleartext credential caching",
       "area": "Credential protection",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1003.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -33,14 +38,16 @@
       "settings": [
         { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\Wdigest", "name": "UseLogonCredential", "value": 0 }
       ],
-      "rationale": "Prevents LSASS from holding reversible copies of user passwords in memory."
+      "rationale": "Prevents LSASS from holding reversible copies of user passwords in memory. CIS dropped this in v5 because it's already the default; setting it explicitly stops anything turning it back on."
     },
     {
       "id": "CRED-03",
       "title": "Block anonymous enumeration of SAM accounts and shares",
       "area": "Credential protection",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["2.3.10.2", "2.3.10.3"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms"],
       "platforms": ["azure", "vsphere"],
       "mitre": [
         { "id": "T1087.001", "relation": "mitigates" },
@@ -59,8 +66,9 @@
       "id": "CRED-04",
       "title": "Block Microsoft accounts",
       "area": "Credential protection",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [],
       "enabledByDefault": true,
@@ -69,14 +77,34 @@
       "settings": [
         { "path": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "name": "NoConnectedUser", "value": 3 }
       ],
-      "rationale": "Servers should only use domain or local accounts, not personal Microsoft accounts."
+      "rationale": "Servers should only use domain or local accounts, not personal Microsoft accounts. CIS dropped this in v5; kept as extra hardening."
+    },
+    {
+      "id": "CRED-05",
+      "title": "Cache no more than 4 previous logons",
+      "area": "Credential protection",
+      "cis": { "ws2022": ["2.3.7.6"] },
+      "level": 2,
+      "os": ["ws2022"],
+      "roles": ["ms"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1003.005", "relation": "mitigates" }],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "name": "CachedLogonsCount", "value": "4", "kind": "String" }
+      ],
+      "rationale": "Fewer cached domain credentials on the server means fewer password hashes for an attacker to dump and crack offline."
     },
     {
       "id": "NET-01",
       "title": "Allow NTLMv2 only; refuse LM and NTLMv1",
       "area": "Authentication",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["2.3.11.7"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [
         { "id": "T1557.001", "relation": "mitigates" },
@@ -94,8 +122,10 @@
       "id": "NET-02",
       "title": "Require SMB signing (server and client)",
       "area": "Authentication",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["2.3.8.1", "2.3.9.2"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1557.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -111,8 +141,10 @@
       "id": "SURF-01",
       "title": "Remove SMBv1",
       "area": "Attack surface",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["18.4.2", "18.4.3"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1210", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -125,8 +157,9 @@
       "id": "SURF-02",
       "title": "Remove the PowerShell v2 engine",
       "area": "Attack surface",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1562.010", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -139,8 +172,10 @@
       "id": "NAME-01",
       "title": "Disable LLMNR",
       "area": "Name resolution",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["18.6.4.4"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1557.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -155,8 +190,9 @@
       "id": "NAME-02",
       "title": "Disable NetBIOS over TCP/IP (re-applied at every boot)",
       "area": "Name resolution",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1557.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -170,8 +206,10 @@
       "id": "RDP-01",
       "title": "Harden Remote Desktop (NLA, TLS, high encryption, no drive redirection)",
       "area": "Remote Desktop",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["18.10.57.3.9.4", "18.10.57.3.9.3", "18.10.57.3.9.5", "18.10.57.3.3.3"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1021.001", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -186,29 +224,50 @@
       "rationale": "Requires authentication before a session starts, encrypts the connection, and stops files being copied through mapped drives."
     },
     {
-      "id": "LOG-01",
-      "title": "Enable PowerShell script block and module logging",
-      "area": "PowerShell logging",
-      "cis": { "ref": "TBC", "level": 1 },
+      "id": "RDP-02",
+      "title": "Block COM, LPT and Plug and Play device redirection over RDP",
+      "area": "Remote Desktop",
+      "cis": { "ws2022": ["18.10.57.3.3.2", "18.10.57.3.3.5", "18.10.57.3.3.6"] },
+      "level": 2,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", "name": "fDisableCcm", "value": 1 },
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", "name": "fDisableLPT", "value": 1 },
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services", "name": "fDisablePNPRedir", "value": 1 }
+      ],
+      "rationale": "Stops a remote session from connecting client-side serial, parallel and USB-style devices to the server."
+    },
+    {
+      "id": "LOG-01",
+      "title": "Enable PowerShell script block logging",
+      "area": "PowerShell logging",
+      "cis": { "ws2022": ["18.10.88.1"] },
+      "level": 2,
+      "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1059.001", "relation": "detects" }],
       "enabledByDefault": true,
       "requiresReboot": false,
       "type": "registry",
       "settings": [
-        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", "name": "EnableScriptBlockLogging", "value": 1 },
-        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging", "name": "EnableModuleLogging", "value": 1 },
-        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging\\ModuleNames", "name": "*", "value": "*", "kind": "String" }
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", "name": "EnableScriptBlockLogging", "value": 1 }
       ],
-      "rationale": "Records the PowerShell code that actually runs, including deobfuscated scripts, for investigation."
+      "rationale": "Records the full text of PowerShell code as it runs, including deobfuscated code, so attacker scripts show up in the event log."
     },
     {
       "id": "LOG-02",
       "title": "Increase the PowerShell Operational log to 256 MB",
       "area": "PowerShell logging",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 2,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1059.001", "relation": "detects" }],
       "enabledByDefault": true,
@@ -219,11 +278,30 @@
       "rationale": "Script block logging is noisy; a larger log keeps enough history to be useful."
     },
     {
+      "id": "LOG-03",
+      "title": "Enable PowerShell module logging for all modules",
+      "area": "PowerShell logging",
+      "level": 2,
+      "os": ["ws2022"],
+      "roles": ["ms", "dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1059.001", "relation": "detects" }],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging", "name": "EnableModuleLogging", "value": 1 },
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging\\ModuleNames", "name": "*", "value": "*", "kind": "String" }
+      ],
+      "rationale": "Logs pipeline execution details for every module. Not a CIS recommendation, but it fills gaps script block logging misses."
+    },
+    {
       "id": "CRYPTO-01",
       "title": "Disable SSL 2.0/3.0 and TLS 1.0/1.1; enable TLS 1.2",
       "area": "Cryptography",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1557", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -257,8 +335,9 @@
       "id": "CRYPTO-02",
       "title": "Make .NET Framework use strong cryptography and OS TLS defaults",
       "area": "Cryptography",
-      "cis": { "ref": "TBC", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1557", "relation": "mitigates" }],
       "enabledByDefault": true,
@@ -280,8 +359,10 @@
       "id": "URA-01",
       "title": "Deny network logon to Guests and local accounts",
       "area": "User rights",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["2.2.21"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms"],
       "platforms": ["azure", "vsphere"],
       "mitre": [
         { "id": "T1021.002", "relation": "mitigates" },
@@ -290,16 +371,37 @@
       "enabledByDefault": false,
       "requiresReboot": false,
       "type": "script",
-      "apply": "scripts/URA-01.apply.ps1",
-      "test": "scripts/URA-01.test.ps1",
+      "apply": "scripts/DenyNetworkLogon.apply.ps1",
+      "test": "scripts/DenyNetworkLogon.test.ps1",
+      "parameters": { "sids": ["*S-1-5-32-546", "*S-1-5-114"] },
       "rationale": "Stops local accounts being used to move between servers. Off by default because in a domain this belongs in Group Policy."
+    },
+    {
+      "id": "URA-02",
+      "title": "Deny network logon to Guests (domain controllers)",
+      "area": "User rights",
+      "cis": { "ws2022": ["2.2.20"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1021.002", "relation": "mitigates" }],
+      "enabledByDefault": false,
+      "requiresReboot": false,
+      "type": "script",
+      "apply": "scripts/DenyNetworkLogon.apply.ps1",
+      "test": "scripts/DenyNetworkLogon.test.ps1",
+      "parameters": { "sids": ["*S-1-5-32-546"] },
+      "rationale": "The DC version of URA-01. Domain controllers have no local accounts, so only Guests are denied. Off by default because in a domain this belongs in the Default Domain Controllers Policy."
     },
     {
       "id": "AUDIT-01",
       "title": "Force advanced audit policy and include command lines in process events",
       "area": "Auditing",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["2.3.2.1", "18.9.3.1"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [{ "id": "T1059", "relation": "detects" }],
       "enabledByDefault": true,
@@ -315,8 +417,10 @@
       "id": "AUDIT-02",
       "title": "Configure advanced audit policy subcategories",
       "area": "Auditing",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["17.1.1", "17.5.4", "17.5.6", "17.5.1", "17.2.6", "17.2.5", "17.3.2", "17.9.4", "17.6.3", "17.7.1", "17.8.1"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [
         { "id": "T1078", "relation": "detects" },
@@ -338,31 +442,37 @@
         { "guid": "{0CCE9211-69AE-11D9-BED3-505054503030}", "name": "Security System Extension", "success": true, "failure": true },
         { "guid": "{0CCE9227-69AE-11D9-BED3-505054503030}", "name": "Other Object Access Events", "success": true, "failure": true },
         { "guid": "{0CCE922F-69AE-11D9-BED3-505054503030}", "name": "Audit Policy Change", "success": true, "failure": true },
-        { "guid": "{0CCE9228-69AE-11D9-BED3-505054503030}", "name": "Sensitive Privilege Use", "success": false, "failure": true }
+        { "guid": "{0CCE9228-69AE-11D9-BED3-505054503030}", "name": "Sensitive Privilege Use", "success": true, "failure": false }
       ],
       "rationale": "Records logons, account changes, process creation and policy changes, which are the events an investigation needs first."
     },
     {
       "id": "AUDIT-03",
-      "title": "Increase the Security event log to 1 GB",
+      "title": "Set the Security event log to 1 GB and overwrite as needed",
       "area": "Auditing",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["18.10.26.2.1", "18.10.26.2.2"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [],
       "enabledByDefault": true,
       "requiresReboot": false,
-      "type": "eventlog",
-      "log": "Security",
-      "maxSizeBytes": 1073741824,
-      "rationale": "The default size overwrites events within hours on a busy server, before anyone can look at them."
+      "type": "registry",
+      "rationale": "The default size overwrites events within hours on a busy server, before anyone can look at them.",
+      "settings": [
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Security", "name": "MaxSize", "value": 1048576 },
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Security", "name": "Retention", "value": "0", "kind": "String" }
+      ]
     },
     {
       "id": "SVC-01",
-      "title": "Disable the Print Spooler service",
+      "title": "Disable the Print Spooler service (domain controllers)",
       "area": "Services",
-      "cis": { "ref": "TBC", "level": 1 },
+      "cis": { "ws2022": ["5.1"] },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [
         { "id": "T1068", "relation": "mitigates" },
@@ -376,11 +486,125 @@
       "rationale": "Member servers rarely need printing, and the spooler has a long history of serious bugs (PrintNightmare)."
     },
     {
+      "id": "SVC-02",
+      "title": "Disable the Print Spooler service (member servers)",
+      "area": "Services",
+      "cis": { "ws2022": ["5.2"] },
+      "level": 2,
+      "os": ["ws2022"],
+      "roles": ["ms"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [
+        { "id": "T1068", "relation": "mitigates" },
+        { "id": "T1210", "relation": "mitigates" }
+      ],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "service",
+      "service": "Spooler",
+      "startupType": "Disabled",
+      "rationale": "Removes the PrintNightmare attack surface on servers that do not print. Level 2 for member servers because some of them are print servers."
+    },
+    {
+      "id": "SVC-03",
+      "title": "Stop the Print Spooler accepting client connections",
+      "area": "Services",
+      "cis": { "ws2022": ["18.7.1"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["ms", "dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [
+        { "id": "T1068", "relation": "mitigates" },
+        { "id": "T1210", "relation": "mitigates" }
+      ],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Printers", "name": "RegisterSpoolerRemoteRpcEndPoint", "value": 2 }
+      ],
+      "rationale": "Lets local printing keep working but stops remote clients talking to the spooler, which blocks the remote PrintNightmare path."
+    },
+    {
+      "id": "DC-01",
+      "title": "Require LDAP signing on domain controllers",
+      "area": "Domain controller",
+      "cis": { "ws2022": ["2.3.5.4"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1557", "relation": "mitigates" }],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters", "name": "LDAPServerIntegrity", "value": 2 }
+      ],
+      "rationale": "Unsigned LDAP binds can be tampered with or relayed by an attacker in the middle."
+    },
+    {
+      "id": "DC-02",
+      "title": "Always require LDAP channel binding on domain controllers",
+      "area": "Domain controller",
+      "cis": { "ws2022": ["2.3.5.3"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1557", "relation": "mitigates" }],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NTDS\\Parameters", "name": "LdapEnforceChannelBinding", "value": 2 }
+      ],
+      "rationale": "Ties LDAPS authentication to the TLS session, which stops credentials being relayed into LDAP over TLS."
+    },
+    {
+      "id": "DC-03",
+      "title": "Don't let Server Operators schedule tasks on domain controllers",
+      "area": "Domain controller",
+      "cis": { "ws2022": ["2.3.5.1"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [{ "id": "T1053.002", "relation": "mitigates" }],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa", "name": "SubmitControl", "value": 0 }
+      ],
+      "rationale": "Server Operators shouldn't be able to run code as SYSTEM on a DC through the AT scheduler."
+    },
+    {
+      "id": "DC-04",
+      "title": "Keep machine account password changes enabled on domain controllers",
+      "area": "Domain controller",
+      "cis": { "ws2022": ["2.3.5.5"] },
+      "level": 1,
+      "os": ["ws2022"],
+      "roles": ["dc"],
+      "platforms": ["azure", "vsphere"],
+      "mitre": [],
+      "enabledByDefault": true,
+      "requiresReboot": false,
+      "type": "registry",
+      "settings": [
+        { "path": "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "name": "RefusePasswordChange", "value": 0 }
+      ],
+      "rationale": "Computer account passwords should keep rotating; refusing changes leaves the same secret valid indefinitely."
+    },
+    {
       "id": "META-01",
       "title": "Stamp the baseline version in the registry",
       "area": "Baseline tracking",
-      "cis": { "ref": "N/A", "level": 1 },
+      "level": 1,
       "os": ["ws2022"],
+      "roles": ["ms", "dc"],
       "platforms": ["azure", "vsphere"],
       "mitre": [],
       "enabledByDefault": true,

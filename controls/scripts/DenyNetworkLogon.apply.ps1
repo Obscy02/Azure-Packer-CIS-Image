@@ -1,5 +1,6 @@
-# Denies network logon to Guests (S-1-5-32-546) and local accounts (S-1-5-114).
-param($Context)
+# Sets "Deny access to this computer from the network" to the SIDs in the control's parameters.
+# Used by URA-01 (member servers: Guests + local accounts) and URA-02 (DCs: Guests only).
+param($Context, $Parameters)
 
 $SecEditTemp = Join-Path $env:TEMP "cis-ura.inf"
 $SecEditDb   = Join-Path $env:TEMP "cis-ura.sdb"
@@ -11,7 +12,7 @@ Unicode=yes
 signature="`$CHICAGO`$"
 Revision=1
 [Privilege Rights]
-SeDenyNetworkLogonRight = *S-1-5-32-546,*S-1-5-114
+SeDenyNetworkLogonRight = $($Parameters.sids -join ',')
 "@ | Set-Content -Path $SecEditTemp -Encoding Unicode -Force
 
 try {

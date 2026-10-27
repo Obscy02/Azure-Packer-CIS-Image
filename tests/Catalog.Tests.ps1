@@ -35,8 +35,51 @@ Describe 'Controls catalog' {
         $OnDisk | Where-Object { $_ -notin $Referenced } | Should -BeNullOrEmpty
     }
 
-    It 'has at least one control enabled by default for ws2022' {
-        $Catalog.controls | Where-Object { $_.os -contains 'ws2022' -and $_.enabledByDefault } | Should -Not -BeNullOrEmpty
+    It 'has controls enabled by default for both roles on every OS with a benchmark' {
+        foreach ($Os in $Catalog.benchmarks.PSObject.Properties.Name) {
+            foreach ($Role in 'ms', 'dc') {
+                $Catalog.controls | Where-Object { $_.os -contains $Os -and $_.roles -contains $Role -and $_.enabledByDefault } |
+                    Should -Not -BeNullOrEmpty -Because "the $Os $Role profile needs controls"
+            }
+        }
+    }
+
+    It 'only gives CIS refs for OSes the control runs on and that have a benchmark' {
+        $Benchmarked = @($Catalog.benchmarks.PSObject.Properties.Name)
+        foreach ($Control in $Catalog.controls | Where-Object cis) {
+            foreach ($Os in $Control.cis.PSObject.Properties.Name) {
+                $Control.os | Should -Contain $Os -Because "$($Control.id) has a $Os ref"
+                $Benchmarked | Should -Contain $Os -Because "$($Control.id) has a $Os ref"
+            }
+        }
+    }
+
+    It 'every OS a control lists has a benchmark' {
+        $Benchmarked = @($Catalog.benchmarks.PSObject.Properties.Name)
+        $Catalog.controls.os | Sort-Object -Unique | Where-Object { $_ -notin $Benchmarked } | Should -BeNullOrEmpty
+    }
+
+    It 'rejects a malformed CIS ref or a missing level' {
+        $Copy = $CatalogJson | ConvertFrom-Json
+        $Copy.controls[0] | Add-Member -NotePropertyName cis -NotePropertyValue ([pscustomobject]@{ ws2022 = @('TBC') }) -Force
+        Test-Json -Json ($Copy | ConvertTo-Json -Depth 10) -SchemaFile $SchemaPath -ErrorAction SilentlyContinue | Should -BeFalse
+        $Copy = $CatalogJson | ConvertFrom-Json
+        $Copy.controls[0].PSObject.Properties.Remove('level')
+        Test-Json -Json ($Copy | ConvertTo-Json -Depth 10) -SchemaFile $SchemaPath -ErrorAction SilentlyContinue | Should -BeFalse
+    }
+
+    It 'gives every member-server-only user rights control a DC counterpart' {
+        $Ura = $Catalog.controls | Where-Object { $_.area -eq 'User rights' }
+        ($Ura | Where-Object { $_.roles -contains 'ms' }) | Should -Not -BeNullOrEmpty
+        ($Ura | Where-Object { $_.roles -contains 'dc' }) | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rejects a control without roles or with an unknown role' {
+        $Copy = $CatalogJson | ConvertFrom-Json
+        $Copy.controls[0].roles = @('workstation')
+        Test-Json -Json ($Copy | ConvertTo-Json -Depth 10) -SchemaFile $SchemaPath -ErrorAction SilentlyContinue | Should -BeFalse
+        $Copy.controls[0].PSObject.Properties.Remove('roles')
+        Test-Json -Json ($Copy | ConvertTo-Json -Depth 10) -SchemaFile $SchemaPath -ErrorAction SilentlyContinue | Should -BeFalse
     }
 }
 
@@ -46,6 +89,8 @@ Describe 'ATT&CK mappings' {
         # A new mapping must be added here too, which catches typos in technique IDs.
         $ReviewedTechniques = @{
             'T1003.001' = 'OS Credential Dumping: LSASS Memory'
+            'T1003.005' = 'OS Credential Dumping: Cached Domain Credentials'
+            'T1053.002' = 'Scheduled Task/Job: At'
             'T1021.001' = 'Remote Services: Remote Desktop Protocol'
             'T1021.002' = 'Remote Services: SMB/Windows Admin Shares'
             'T1059'     = 'Command and Scripting Interpreter'

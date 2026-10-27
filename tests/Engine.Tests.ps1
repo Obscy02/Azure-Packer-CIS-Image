@@ -11,8 +11,8 @@ BeforeAll {
         param([hashtable]$Overrides = @{})
         $Base = @{
             id = 'TEST-01'; title = 'Test control'; area = 'Test'
-            cis = [pscustomobject]@{ ref = 'TBC'; level = 1 }
-            os = @('ws2022'); platforms = @('azure'); mitre = @()
+            level = 1
+            os = @('ws2022'); roles = @('ms', 'dc'); platforms = @('azure'); mitre = @()
             enabledByDefault = $true; requiresReboot = $false
             type = 'registry'; rationale = 'Test'
         }
@@ -24,6 +24,24 @@ BeforeAll {
 }
 
 Describe 'Select-CisControl' {
+    It 'selects member server controls by default and leaves out DC-only ones' {
+        $Ids = (Select-CisControl -Catalog $Catalog -Os ws2022).id
+        $Ids | Should -Contain 'CRED-03'
+        $Ids | Should -Not -Contain 'DC-01'
+    }
+
+    It 'selects DC controls for -Role dc and leaves out member-server-only ones' {
+        $Ids = (Select-CisControl -Catalog $Catalog -Os ws2022 -Role dc).id
+        $Ids | Should -Contain 'DC-01'
+        $Ids | Should -Contain 'CRED-01'
+        $Ids | Should -Not -Contain 'CRED-03'
+    }
+
+    It 'adds Level 2 controls only at -Level 2' {
+        (Select-CisControl -Catalog $Catalog -Os ws2022 -Level 1).id | Should -Not -Contain 'RDP-02'
+        (Select-CisControl -Catalog $Catalog -Os ws2022 -Level 2).id | Should -Contain 'RDP-02'
+    }
+
     It 'leaves out opt-in controls by default' {
         $Ids = (Select-CisControl -Catalog $Catalog -Os ws2022).id
         $Ids | Should -Not -Contain 'URA-01'
@@ -42,8 +60,19 @@ Describe 'Select-CisControl' {
         { Select-CisControl -Catalog $Catalog -Os ws2022 -Exclude NOPE-99 } | Should -Throw '*NOPE-99*'
     }
 
-    It 'returns nothing for an OS the catalog does not cover' {
-        Select-CisControl -Catalog $Catalog -Os ws2019 | Should -BeNullOrEmpty
+    It 'returns nothing for an OS no control lists' {
+        $Mini = [pscustomobject]@{ controls = @(New-TestControl) }
+        Select-CisControl -Catalog $Mini -Os ws2019 | Should -BeNullOrEmpty
+    }
+
+    It 'leaves out hardening controls with -CisOnly' {
+        $Mini = [pscustomobject]@{ controls = @(
+            (New-TestControl @{ id = 'CIS-01'; cis = [pscustomobject]@{ ws2022 = @('1.1.1') } }),
+            (New-TestControl @{ id = 'CIS-02'; cis = [pscustomobject]@{ ws2025 = @('1.1.1') } }),
+            (New-TestControl @{ id = 'HARD-01' })
+        ) }
+        (Select-CisControl -Catalog $Mini -Os ws2022).id | Should -Be @('CIS-01', 'CIS-02', 'HARD-01')
+        (Select-CisControl -Catalog $Mini -Os ws2022 -CisOnly).id | Should -Be @('CIS-01')
     }
 
     It 'filters by platform when one is given' {
@@ -54,10 +83,35 @@ Describe 'Select-CisControl' {
     It 'includes level 1 controls at level 2, but not level 2 controls at level 1' {
         $Mini = [pscustomobject]@{ controls = @(
             (New-TestControl @{ id = 'L1-01' }),
-            (New-TestControl @{ id = 'L2-01'; cis = [pscustomobject]@{ ref = 'TBC'; level = 2 } })
+            (New-TestControl @{ id = 'L2-01'; level = 2 })
         ) }
         (Select-CisControl -Catalog $Mini -Os ws2022 -Level 1).id | Should -Be @('L1-01')
         (Select-CisControl -Catalog $Mini -Os ws2022 -Level 2).id | Should -Be @('L1-01', 'L2-01')
+    }
+}
+
+Describe 'Assert-CisSupportedRole' {
+    It 'accepts <Role> on DomainRole <DomainRole>' -ForEach @(
+        @{ Role = 'ms'; DomainRole = 2 }, @{ Role = 'ms'; DomainRole = 3 },
+        @{ Role = 'dc'; DomainRole = 4 }, @{ Role = 'dc'; DomainRole = 5 }
+    ) {
+        Mock -ModuleName CisBaseline Get-CisDomainRole { $DomainRole }
+        { Assert-CisSupportedRole -Role $Role } | Should -Not -Throw
+    }
+
+    It 'refuses the member server profile on a DC and says which role to use' {
+        Mock -ModuleName CisBaseline Get-CisDomainRole { 5 }
+        { Assert-CisSupportedRole -Role ms } | Should -Throw '*use -Role dc*'
+    }
+
+    It 'refuses the DC profile on a member server' {
+        Mock -ModuleName CisBaseline Get-CisDomainRole { 3 }
+        { Assert-CisSupportedRole -Role dc } | Should -Throw '*use -Role ms*'
+    }
+
+    It 'refuses workstations for either profile' {
+        Mock -ModuleName CisBaseline Get-CisDomainRole { 1 }
+        { Assert-CisSupportedRole -Role ms } | Should -Throw '*workstation*'
     }
 }
 
@@ -135,6 +189,12 @@ Describe 'Test-CisControl' {
             (Test-CisControl -Control (New-TestControl @{ type = 'script'; test = 'pass.ps1' }) -Context $Context).Passed | Should -BeTrue
             (Test-CisControl -Control (New-TestControl @{ type = 'script'; test = 'fail.ps1' }) -Context $Context).Passed | Should -BeFalse
         }
+
+        It 'passes the control parameters to scripts that share a file' {
+            Set-Content -Path (Join-Path $TestDrive 'params.ps1') -Value 'param($Context, $Parameters) $Parameters.sids.Count -eq 2'
+            $Control = New-TestControl @{ type = 'script'; test = 'params.ps1'; parameters = [pscustomobject]@{ sids = @('a', 'b') } }
+            (Test-CisControl -Control $Control -Context $Context).Passed | Should -BeTrue
+        }
     }
 }
 
@@ -159,8 +219,9 @@ Describe 'Evidence exports' {
     BeforeAll {
         $Mini = [pscustomobject]@{
             version = '9.9.9'; attackVersion = '16'
+            benchmarks = [pscustomobject]@{ ws2022 = 'CIS Test Benchmark v1.0.0' }
             controls = @(
-                (New-TestControl @{ id = 'A-01'; mitre = @([pscustomobject]@{ id = 'T1557.001'; relation = 'mitigates' }) }),
+                (New-TestControl @{ id = 'A-01'; cis = [pscustomobject]@{ ws2022 = @('2.3.1', '2.3.2') }; mitre = @([pscustomobject]@{ id = 'T1557.001'; relation = 'mitigates' }) }),
                 (New-TestControl @{ id = 'B-01'; mitre = @(
                     [pscustomobject]@{ id = 'T1557.001'; relation = 'detects' },
                     [pscustomobject]@{ id = 'T1059'; relation = 'detects' }
@@ -207,25 +268,37 @@ Describe 'Evidence exports' {
     Context 'Export-CisComplianceReport' {
         It 'counts passes and failures and includes the ATT&CK mappings' {
             $Path = Join-Path $TestDrive 'out/results.json'
-            Export-CisComplianceReport -Results $Results -Catalog $Mini -Os ws2022 -Level 1 -Path $Path
+            Export-CisComplianceReport -Results $Results -Catalog $Mini -Os ws2022 -Role dc -Level 1 -Path $Path
             $Report = Get-Content $Path -Raw | ConvertFrom-Json
+            $Report.role | Should -Be 'dc'
             $Report.passed | Should -Be 2
             $Report.failed | Should -Be 1
             $Report.catalogVersion | Should -Be '9.9.9'
+            $Report.benchmark | Should -Be 'CIS Test Benchmark v1.0.0'
             ($Report.results | Where-Object id -eq 'B-01').mitre.Count | Should -Be 2
+            ($Report.results | Where-Object id -eq 'A-01').cis | Should -Be @('2.3.1', '2.3.2')
+            ($Report.results | Where-Object id -eq 'B-01').cis | Should -BeNullOrEmpty
         }
     }
 
     Context 'ConvertTo-CisSummaryMarkdown' {
         It 'has a row per control and escapes pipes in failure details' {
-            $Md = ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Mini.controls -Catalog $Mini
+            $Md = ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Mini.controls -Catalog $Mini -Os ws2022 -ProfileName 'DC L1'
+            $Md | Should -BeLike '## CIS baseline 9.9.9 (DC L1)*'
             $Md | Should -BeLike '*2 of 3 controls passed*'
             ($Md -split "`n" | Where-Object { $_ -match '^\| .* \| [A-C]-01 \|' }).Count | Should -Be 3
             $Md | Should -BeLike '*Key = 0 \| expected 1*'
         }
 
+        It 'shows the CIS refs for the OS and marks hardening controls' {
+            $Md = ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Mini.controls -Catalog $Mini -Os ws2022
+            $Md | Should -BeLike '*Benchmark: CIS Test Benchmark v1.0.0*'
+            $Md | Should -BeLike '*| A-01 | 2.3.1, 2.3.2 |*'
+            $Md | Should -BeLike '*| B-01 | `*Hardening`* |*'
+        }
+
         It 'says so when there are no results' {
-            ConvertTo-CisSummaryMarkdown -Results $null -Controls $Mini.controls -Catalog $Mini | Should -BeLike '*No compliance results*'
+            ConvertTo-CisSummaryMarkdown -Results $null -Controls $Mini.controls -Catalog $Mini -Os ws2022 | Should -BeLike '*No compliance results*'
         }
     }
 }

@@ -11,6 +11,27 @@ on:
     - '.github/workflows/packer.yml'
   workflow_dispatch:
     inputs:
+      # Only versions whose CIS benchmark is mapped in controls/catalog.json (see "benchmarks")
+      os:
+        description: "Windows Server version"
+        type: choice
+        default: ws2022
+        options:
+          - ws2022
+      role:
+        description: "Profile: ms = member server image, dc = throwaway domain controller test (no image)"
+        type: choice
+        default: ms
+        options:
+          - ms
+          - dc
+      cis_level:
+        description: "CIS level"
+        type: choice
+        default: "1"
+        options:
+          - "1"
+          - "2"
       vm_size:
         description: "Build VM size"
         type: choice
@@ -27,9 +48,11 @@ jobs:
   packer-build:
     runs-on: ubuntu-latest
     env:
-      # Baseline profile, shared by the Packer build and the evidence steps below
-      PKR_VAR_os: ws2022
-      PKR_VAR_cis_level: 1
+      # Baseline profile, shared by the Packer build and the evidence steps below.
+      # Pushes always build the Server 2022 member server Level 1 image.
+      PKR_VAR_os: ${{ inputs.os || 'ws2022' }}
+      PKR_VAR_role: ${{ inputs.role || 'ms' }}
+      PKR_VAR_cis_level: ${{ inputs.cis_level || '1' }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -70,11 +93,12 @@ jobs:
         run: |
           Import-Module ./engine/CisBaseline.psm1
           $Catalog  = Get-CisCatalog -Path ./controls/catalog.json
-          $Controls = @(Select-CisControl -Catalog $Catalog -Os $env:PKR_VAR_os -Level $env:PKR_VAR_cis_level -Platform azure)
-          Export-AttackLayer -Controls $Controls -Catalog $Catalog -Path ./artifacts/attack-layer.json
+          $Controls = @(Select-CisControl -Catalog $Catalog -Os $env:PKR_VAR_os -Role $env:PKR_VAR_role -Level $env:PKR_VAR_cis_level -Platform azure)
+          $ProfileName = "$($env:PKR_VAR_os) $($env:PKR_VAR_role.ToUpper()) L$($env:PKR_VAR_cis_level)"
+          Export-AttackLayer -Controls $Controls -Catalog $Catalog -Path ./artifacts/attack-layer.json -Name "CIS baseline $($Catalog.version) $ProfileName coverage"
           $ResultsFile = './artifacts/compliance-results.json'
           $Results = if (Test-Path $ResultsFile) { (Get-Content $ResultsFile -Raw | ConvertFrom-Json).results } else { $null }
-          ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Controls -Catalog $Catalog >> $env:GITHUB_STEP_SUMMARY
+          ConvertTo-CisSummaryMarkdown -Results $Results -Controls $Controls -Catalog $Catalog -Os $env:PKR_VAR_os -ProfileName $ProfileName >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload compliance evidence
         if: always()
